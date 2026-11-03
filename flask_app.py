@@ -62,7 +62,8 @@ NSE_STOCKS = [
     {"symbol": "WIPRO.NS", "name": "Wipro"},
     {"symbol": "ULTRACEMCO.NS", "name": "UltraTech Cement"},
     {"symbol": "HCLTECH.NS", "name": "HCL Technologies"},
-    {"symbol": "TATAMOTORS.NS", "name": "Tata Motors"},
+    {"symbol": "TMCV.NS", "name": "Tata Motors Limited"},
+    {"symbol": "TMPV.NS", "name": "Tata Motors Passenger Vehicles"},
     {"symbol": "TATASTEEL.NS", "name": "Tata Steel"},
     {"symbol": "NTPC.NS", "name": "NTPC"},
     {"symbol": "POWERGRID.NS", "name": "Power Grid Corp"},
@@ -137,7 +138,8 @@ NSE_STOCKS = [
     {"symbol": "AUROPHARMA.NS", "name": "Aurobindo Pharma"},
     {"symbol": "BIOCON.NS", "name": "Biocon"},
     {"symbol": "MAXHEALTH.NS", "name": "Max Healthcare"},
-    {"symbol": "LTIM.NS", "name": "LTIMindtree"},
+    {"symbol": "OFSS.NS", "name": "Oracle Financial Services Software"},
+    {"symbol": "TATAELXSI.NS", "name": "Tata Elxsi"},
     {"symbol": "PERSISTENT.NS", "name": "Persistent Systems"},
     {"symbol": "COFORGE.NS", "name": "Coforge"},
     {"symbol": "MPHASIS.NS", "name": "Mphasis"},
@@ -149,24 +151,38 @@ NSE_STOCKS = [
 # Helpers
 # ---------------------------------------------------------------------------
 
+_SESSION = requests.Session()
+_SESSION.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+})
+
 def _fetch_ticker(symbol: str, period: str) -> pd.DataFrame:
-    """Fetch historical daily data for a single ticker with fallback."""
-    try:
-        ticker = yf.Ticker(symbol)
-        df = ticker.history(period=period, auto_adjust=True)
-        if (df is None or df.empty) and period == "max":
-            df = ticker.history(period="10y", auto_adjust=True)
-            if df is None or df.empty:
-                df = ticker.history(period="5y", auto_adjust=True)
-        if df is None or df.empty:
-            return pd.DataFrame()
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        df.index = pd.to_datetime(df.index.strftime("%Y-%m-%d"))
-        return df
-    except Exception as exc:
-        app.logger.warning("Failed to fetch %s: %s", symbol, exc)
-        return pd.DataFrame()
+    """Fetch historical daily data for a single ticker with robust fallback and retries."""
+    candidates = [symbol]
+    if symbol.endswith(".NS"):
+        candidates.append(symbol[:-3] + ".BO")
+    elif symbol.endswith(".BO"):
+        candidates.append(symbol[:-3] + ".NS")
+
+    periods_to_try = [period]
+    if period == "max":
+        periods_to_try = ["max", "20y", "10y", "5y"]
+
+    for sym in candidates:
+        for p in periods_to_try:
+            for attempt in range(3):
+                try:
+                    ticker = yf.Ticker(sym, session=_SESSION)
+                    df = ticker.history(period=p, auto_adjust=True)
+                    if df is not None and not df.empty:
+                        if isinstance(df.columns, pd.MultiIndex):
+                            df.columns = df.columns.get_level_values(0)
+                        df.index = pd.to_datetime(df.index.strftime("%Y-%m-%d"))
+                        return df.sort_index()
+                except Exception as exc:
+                    time.sleep(0.3)
+    return pd.DataFrame()
 
 
 def _get_stock_info(symbol: str, ticker_obj: yf.Ticker | None = None) -> dict:

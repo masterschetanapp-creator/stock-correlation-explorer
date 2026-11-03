@@ -5,6 +5,7 @@ Deployable to Streamlit Community Cloud (share.streamlit.io)
 """
 
 import math
+import time
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import xml.etree.ElementTree as ET
@@ -16,6 +17,13 @@ import yfinance as yf
 import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+
+# Persistent HTTP session with desktop browser headers for resilient data fetching
+_SESSION = requests.Session()
+_SESSION.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+})
 
 # ---------------------------------------------------------------------------
 # 1. Page Configuration & Custom Theme
@@ -130,7 +138,8 @@ NSE_STOCKS = [
     {"symbol": "WIPRO.NS", "name": "Wipro"},
     {"symbol": "ULTRACEMCO.NS", "name": "UltraTech Cement"},
     {"symbol": "HCLTECH.NS", "name": "HCL Technologies"},
-    {"symbol": "TATAMOTORS.NS", "name": "Tata Motors"},
+    {"symbol": "TMCV.NS", "name": "Tata Motors Limited"},
+    {"symbol": "TMPV.NS", "name": "Tata Motors Passenger Vehicles"},
     {"symbol": "TATASTEEL.NS", "name": "Tata Steel"},
     {"symbol": "NTPC.NS", "name": "NTPC"},
     {"symbol": "POWERGRID.NS", "name": "Power Grid Corp"},
@@ -205,7 +214,8 @@ NSE_STOCKS = [
     {"symbol": "AUROPHARMA.NS", "name": "Aurobindo Pharma"},
     {"symbol": "BIOCON.NS", "name": "Biocon"},
     {"symbol": "MAXHEALTH.NS", "name": "Max Healthcare"},
-    {"symbol": "LTIM.NS", "name": "LTIMindtree"},
+    {"symbol": "OFSS.NS", "name": "Oracle Financial Services Software"},
+    {"symbol": "TATAELXSI.NS", "name": "Tata Elxsi"},
     {"symbol": "PERSISTENT.NS", "name": "Persistent Systems"},
     {"symbol": "COFORGE.NS", "name": "Coforge"},
     {"symbol": "MPHASIS.NS", "name": "Mphasis"},
@@ -225,22 +235,43 @@ FACTOR_CONFIG = {
 # ---------------------------------------------------------------------------
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_ticker_data(symbol: str, period: str) -> pd.DataFrame:
-    """Fetch and standardize daily historical data for a ticker with automatic fallback."""
-    try:
-        t = yf.Ticker(symbol)
-        df = t.history(period=period, auto_adjust=True)
-        if (df is None or df.empty) and period == "max":
-            df = t.history(period="10y", auto_adjust=True)
-            if df is None or df.empty:
-                df = t.history(period="5y", auto_adjust=True)
-        if df is None or df.empty:
-            return pd.DataFrame()
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        df.index = pd.to_datetime(df.index.strftime("%Y-%m-%d"))
-        return df.sort_index()
-    except Exception as exc:
-        return pd.DataFrame()
+    """Fetch and standardize daily historical data for a ticker with automatic fallback and retries."""
+    candidates = [symbol]
+    if symbol.endswith(".NS"):
+        candidates.append(symbol[:-3] + ".BO")
+    elif symbol.endswith(".BO"):
+        candidates.append(symbol[:-3] + ".NS")
+
+    periods_to_try = [period]
+    if period == "max":
+        periods_to_try = ["max", "20y", "10y", "5y"]
+
+    for sym in candidates:
+        for p in periods_to_try:
+            for attempt in range(3):
+                try:
+                    t = yf.Ticker(sym, session=_SESSION)
+                    df = t.history(period=p, auto_adjust=True)
+                    if df is not None and not df.empty:
+                        if isinstance(df.columns, pd.MultiIndex):
+                            df.columns = df.columns.get_level_values(0)
+                        df.index = pd.to_datetime(df.index.strftime("%Y-%m-%d"))
+                        return df.sort_index()
+                except Exception:
+                    time.sleep(0.3)
+
+    # Return empty DataFrame without caching invalid states
+    return pd.DataFrame()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_all_macro_factors(period: str) -> dict:
+    """Fetch all 4 macro factors (USD/INR, Crude, Gold, Silver). Cached globally across all stocks."""
+    factor_dfs = {}
+    for fkey, cfg in FACTOR_CONFIG.items():
+        df = fetch_ticker_data(cfg["ticker"], period)
+        factor_dfs[fkey] = df
+    return factor_dfs
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -248,7 +279,7 @@ def get_company_meta(symbol: str) -> dict:
     """Get stock metadata and earnings history."""
     meta = {"name": symbol, "currency": "INR", "sector": "Equities", "industry": "General", "earnings": []}
     try:
-        t = yf.Ticker(symbol)
+        t = yf.Ticker(symbol, session=_SESSION)
         info = t.info or {}
         meta["name"] = info.get("longName") or info.get("shortName") or symbol
         meta["currency"] = info.get("currency", "INR")
@@ -283,17 +314,7 @@ def load_all_market_data(stock_symbol: str, period: str):
         return None
 
     meta = get_company_meta(stock_symbol)
-
-    # Parallel factor fetch
-    factor_dfs = {}
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = {
-            pool.submit(fetch_ticker_data, cfg["ticker"], period): fkey
-            for fkey, cfg in FACTOR_CONFIG.items()
-        }
-        for fut in as_completed(futures):
-            fkey = futures[fut]
-            factor_dfs[fkey] = fut.result()
+    factor_dfs = fetch_all_macro_factors(period)
 
     # Align factors to stock dates using merge_asof
     aligned_df = pd.DataFrame(index=stock_df.index)
@@ -340,26 +361,28 @@ def load_all_market_data(stock_symbol: str, period: str):
     # Returns beta: % move in stock per 1% move in factor
     sensitivities = {"usdinr": 0.0, "oil": 0.0, "gold": 0.0, "silver": 0.0, "r2": 0.0}
     try:
-        reg_df = aligned_df[["Stock", "usdinr", "oil", "gold", "silver"]].dropna()
+        reg_df = aligned_df[["Stock", "usdinr", "oil", "gold", "silver"]].dropna().copy()
         if len(reg_df) >= 30:
             rets = reg_df.pct_change().dropna()
-            y = rets["Stock"].values
-            X_cols = ["usdinr", "oil", "gold", "silver"]
-            X_mat = rets[X_cols].values
-            X_with_const = np.column_stack([np.ones(len(y)), X_mat])
+            rets = rets.replace([np.inf, -np.inf], np.nan).dropna()
+            if len(rets) >= 30:
+                y = rets["Stock"].values
+                X_cols = ["usdinr", "oil", "gold", "silver"]
+                X_mat = rets[X_cols].values
+                X_with_const = np.column_stack([np.ones(len(y)), X_mat])
 
-            betas, _, _, _ = np.linalg.lstsq(X_with_const, y, rcond=None)
-            ss_tot = np.sum((y - np.mean(y)) ** 2)
-            ss_res = np.sum((y - (X_with_const @ betas)) ** 2)
-            r2_val = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+                betas, _, _, _ = np.linalg.lstsq(X_with_const, y, rcond=None)
+                ss_tot = np.sum((y - np.mean(y)) ** 2)
+                ss_res = np.sum((y - (X_with_const @ betas)) ** 2)
+                r2_val = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
 
-            sensitivities = {
-                "usdinr": round(float(betas[1]), 3),
-                "oil": round(float(betas[2]), 3),
-                "gold": round(float(betas[3]), 3),
-                "silver": round(float(betas[4]), 3),
-                "r2": max(0.0, round(float(r2_val), 3)),
-            }
+                sensitivities = {
+                    "usdinr": round(float(betas[1]), 3),
+                    "oil": round(float(betas[2]), 3),
+                    "gold": round(float(betas[3]), 3),
+                    "silver": round(float(betas[4]), 3),
+                    "r2": max(0.0, round(float(r2_val), 3)),
+                }
     except Exception:
         pass
 
@@ -607,7 +630,8 @@ stock_dates_set = set(df.index.strftime("%Y-%m-%d"))
 
 for e in earnings_list[-6:]:
     if e["date"] in stock_dates_set:
-        stock_price_on_date = df.loc[e["date"], "Stock"]
+        val = df.loc[e["date"], "Stock"]
+        stock_price_on_date = float(val.iloc[0]) if hasattr(val, "iloc") else float(val)
         surp = e.get("surprisePct")
         beat = surp is not None and surp >= 0
         tag = f"📅 Results ({'+' if beat else ''}{surp:.1f}%)" if surp is not None else "📅 Results"

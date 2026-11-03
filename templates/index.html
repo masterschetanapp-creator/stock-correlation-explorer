@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stock Correlation Explorer — Multi-Factor Market Nexus</title>
+  <link rel="stylesheet" href="/static/css/styles.css">
+  <!-- TradingView Lightweight Charts v4 -->
+  <script src="https://unpkg.com/lightweight-charts@4.1.7/dist/lightweight-charts.standalone.production.js"></script>
+  <!-- Chart.js for correlation charts -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <!-- Loading Overlay -->
+  <div id="loading-overlay" class="hidden">
+    <div class="spinner"></div>
+    <p id="loading-text">Loading stock data...</p>
+  </div>
+
+  <!-- Header -->
+  <header class="app-header">
+    <div class="logo">
+      <span class="logo-icon">🌐</span>
+      <div>
+        <h1>Stock Correlation Explorer</h1>
+        <span class="subtitle">NSE / BSE Multi-Factor Interrelation &amp; Predictive Sensitivity Engine</span>
+      </div>
+    </div>
+    <div class="search-area">
+      <div class="search-wrapper">
+        <input type="text" id="stock-input" placeholder="Search stock (e.g. RELIANCE, TCS, INFY)" autocomplete="off">
+        <div id="suggestions-dropdown" class="suggestions hidden"></div>
+      </div>
+      <div class="period-buttons">
+        <button class="period-btn" data-period="1y">1Y</button>
+        <button class="period-btn" data-period="2y">2Y</button>
+        <button class="period-btn active" data-period="5y">5Y</button>
+        <button class="period-btn" data-period="10y">10Y</button>
+        <button class="period-btn" data-period="max">MAX</button>
+      </div>
+      <button id="search-btn" class="search-btn">🔍 Analyze</button>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="app-main">
+    <!-- Left: Charts & Predictive Simulator -->
+    <div class="charts-panel">
+      <!-- Stock Name Banner -->
+      <div id="stock-banner" class="stock-banner hidden">
+        <div>
+          <h2 id="stock-name"></h2>
+          <div class="stock-subinfo">
+            <span id="stock-symbol-badge" class="badge"></span>
+            <span id="stock-currency-badge" class="badge"></span>
+            <span id="stock-sector-badge" class="badge"></span>
+          </div>
+        </div>
+        <div class="stock-current-box">
+          <span class="stock-current-label">Latest Price</span>
+          <span class="stock-current-val" id="stock-live-price">---</span>
+        </div>
+      </div>
+
+      <!-- Main Worm Chart -->
+      <div class="chart-container">
+        <div class="chart-title">
+          <span>📈 Price Worm Chart (Interactive Lifetime Curve)</span>
+          <span class="chart-subtitle">Hover on any point to inspect historical macro factors &amp; news</span>
+        </div>
+        <div id="main-chart" style="height: 420px;"></div>
+      </div>
+
+      <!-- Factor Overlay Chart -->
+      <div class="chart-container">
+        <div class="chart-title">
+          <span>🔀 Factor Overlay (Normalized 0–100 Scale)</span>
+          <div class="factor-toggles">
+            <label><input type="checkbox" id="toggle-stock" checked> <span style="color:#2962ff">●</span> Stock</label>
+            <label><input type="checkbox" id="toggle-usdinr" checked> <span style="color:#9c27b0">●</span> USD/INR</label>
+            <label><input type="checkbox" id="toggle-gold" checked> <span style="color:#ffd700">●</span> Gold</label>
+            <label><input type="checkbox" id="toggle-silver" checked> <span style="color:#c0c0c0">●</span> Silver</label>
+            <label><input type="checkbox" id="toggle-oil" checked> <span style="color:#e67e22">●</span> Crude Oil</label>
+          </div>
+        </div>
+        <div id="overlay-chart" style="height: 220px;"></div>
+      </div>
+
+      <!-- Rolling Correlation Chart -->
+      <div class="chart-container">
+        <div class="chart-title">
+          <span>🔄 Rolling 30-Day Correlation Trend (-1.0 to +1.0)</span>
+          <span class="chart-subtitle">Tracks how factor relationships evolve through market cycles</span>
+        </div>
+        <div style="height: 160px; position: relative;">
+          <canvas id="correlation-chart"></canvas>
+        </div>
+      </div>
+
+      <!-- Future Scenario / What-If Simulator -->
+      <div class="chart-container simulator-container">
+        <div class="chart-title">
+          <span>🔮 Future What-If Scenario Simulator</span>
+          <span class="chart-subtitle">Simulate future factor shifts to predict stock price reaction using regression elasticity</span>
+        </div>
+        
+        <div class="simulator-body">
+          <div class="simulator-controls">
+            <!-- USD/INR Slider -->
+            <div class="sim-row">
+              <div class="sim-label">
+                <span>💱 USD/INR Shift</span>
+                <span class="sim-val" id="val-sim-usdinr">0.0%</span>
+              </div>
+              <input type="range" id="sim-usdinr" min="-10" max="10" step="0.5" value="0">
+              <div class="sim-meta">Sensitivity Beta: <b id="beta-usdinr">0.00</b></div>
+            </div>
+
+            <!-- Crude Oil Slider -->
+            <div class="sim-row">
+              <div class="sim-label">
+                <span>🛢️ Crude Oil Shift</span>
+                <span class="sim-val" id="val-sim-oil">0.0%</span>
+              </div>
+              <input type="range" id="sim-oil" min="-25" max="25" step="1" value="0">
+              <div class="sim-meta">Sensitivity Beta: <b id="beta-oil">0.00</b></div>
+            </div>
+
+            <!-- Gold Slider -->
+            <div class="sim-row">
+              <div class="sim-label">
+                <span>🥇 Gold Shift</span>
+                <span class="sim-val" id="val-sim-gold">0.0%</span>
+              </div>
+              <input type="range" id="sim-gold" min="-20" max="20" step="1" value="0">
+              <div class="sim-meta">Sensitivity Beta: <b id="beta-gold">0.00</b></div>
+            </div>
+
+            <!-- Silver Slider -->
+            <div class="sim-row">
+              <div class="sim-label">
+                <span>🥈 Silver Shift</span>
+                <span class="sim-val" id="val-sim-silver">0.0%</span>
+              </div>
+              <input type="range" id="sim-silver" min="-20" max="20" step="1" value="0">
+              <div class="sim-meta">Sensitivity Beta: <b id="beta-silver">0.00</b></div>
+            </div>
+          </div>
+
+          <!-- Simulator Result Box -->
+          <div class="simulator-output">
+            <div class="sim-result-card">
+              <div class="sim-result-title">Projected Stock Reaction</div>
+              <div class="sim-result-price" id="sim-projected-price">₹---</div>
+              <div class="sim-result-delta" id="sim-projected-delta">0.00%</div>
+              
+              <div class="sim-breakdown" id="sim-breakdown">
+                <!-- Populated dynamically -->
+              </div>
+
+              <!-- Quick Scenario Presets -->
+              <div class="sim-presets">
+                <span class="preset-label">Quick Presets:</span>
+                <button class="preset-btn" onclick="applyPreset('oilShock')">🛢️ Oil +15%</button>
+                <button class="preset-btn" onclick="applyPreset('rupeeWeak')">💱 Rupee -5%</button>
+                <button class="preset-btn" onclick="applyPreset('goldRally')">🥇 Gold +10%</button>
+                <button class="preset-btn" onclick="applyPreset('reset')">↺ Reset</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: Factor Snapshot & Context Panel -->
+    <div class="snapshot-panel">
+      <!-- Factor Snapshot Card -->
+      <div class="card" id="snapshot-card">
+        <h3>📊 Factor Snapshot on Hover</h3>
+        <p class="hint-text">Hover or click anywhere along the worm curve to inspect all factor prices on that exact date</p>
+        <div id="snapshot-content" class="hidden">
+          <div class="snapshot-date" id="snap-date">---</div>
+
+          <div class="snapshot-row stock-row">
+            <span class="factor-icon">📈</span>
+            <span class="factor-label">Stock Price</span>
+            <span class="factor-value" id="snap-stock">---</span>
+            <span class="factor-change" id="snap-stock-chg">---</span>
+          </div>
+
+          <div class="snapshot-divider"></div>
+
+          <div class="snapshot-row">
+            <span class="factor-icon">💱</span>
+            <span class="factor-label">USD/INR</span>
+            <span class="factor-value" id="snap-usdinr">---</span>
+            <span class="factor-change" id="snap-usdinr-chg">---</span>
+          </div>
+
+          <div class="snapshot-row">
+            <span class="factor-icon">🥇</span>
+            <span class="factor-label">Gold (USD/oz)</span>
+            <span class="factor-value" id="snap-gold">---</span>
+            <span class="factor-change" id="snap-gold-chg">---</span>
+          </div>
+
+          <div class="snapshot-row">
+            <span class="factor-icon">🥈</span>
+            <span class="factor-label">Silver (USD/oz)</span>
+            <span class="factor-value" id="snap-silver">---</span>
+            <span class="factor-change" id="snap-silver-chg">---</span>
+          </div>
+
+          <div class="snapshot-row">
+            <span class="factor-icon">🛢️</span>
+            <span class="factor-label">Crude Oil (USD/bbl)</span>
+            <span class="factor-value" id="snap-oil">---</span>
+            <span class="factor-change" id="snap-oil-chg">---</span>
+          </div>
+
+          <!-- Correlation direction arrows -->
+          <div class="snapshot-divider"></div>
+          <div class="correlation-arrows" id="snap-arrows">
+            <!-- Filled dynamically -->
+          </div>
+        </div>
+      </div>
+
+      <!-- Highlights Card: ATH / ATL -->
+      <div class="card" id="highlights-card">
+        <h3>🎯 Lifetime Extremes (Click to Inspect)</h3>
+        <div id="highlights-content">
+          <p class="hint-text">Analyze a stock to see all-time highs &amp; lows</p>
+        </div>
+      </div>
+
+      <!-- Quarterly Results Card -->
+      <div class="card" id="earnings-card">
+        <h3>📅 Quarterly Results (Earnings)</h3>
+        <div id="earnings-content">
+          <p class="hint-text">Earnings history will load here</p>
+        </div>
+      </div>
+
+      <!-- News Card -->
+      <div class="card" id="news-card">
+        <h3>📰 News &amp; Events (Targeted Date)</h3>
+        <p class="hint-text">Hover or click on chart to fetch news for that period</p>
+        <div id="news-content"></div>
+      </div>
+
+      <!-- Overall Correlations Card -->
+      <div class="card" id="correlations-card">
+        <h3>📈 Overall Statistical Correlation</h3>
+        <div id="overall-correlations">
+          <p class="hint-text">Analyze a stock to compute correlations</p>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

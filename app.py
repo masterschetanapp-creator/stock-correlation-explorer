@@ -160,7 +160,8 @@ NSE_STOCKS = [
     {"symbol": "HINDALCO.NS", "name": "Hindalco Industries"},
     {"symbol": "UPL.NS", "name": "UPL"},
     {"symbol": "VEDL.NS", "name": "Vedanta"},
-    {"symbol": "ZOMATO.NS", "name": "Zomato"},
+    {"symbol": "JIOFIN.NS", "name": "Jio Financial Services"},
+    {"symbol": "SWIGGY.NS", "name": "Swiggy"},
     {"symbol": "PAYTM.NS", "name": "One 97 Communications (Paytm)"},
     {"symbol": "NYKAA.NS", "name": "FSN E-Commerce (Nykaa)"},
     {"symbol": "DMART.NS", "name": "Avenue Supermarts (DMart)"},
@@ -224,10 +225,14 @@ FACTOR_CONFIG = {
 # ---------------------------------------------------------------------------
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_ticker_data(symbol: str, period: str) -> pd.DataFrame:
-    """Fetch and standardize daily historical data for a ticker."""
+    """Fetch and standardize daily historical data for a ticker with automatic fallback."""
     try:
         t = yf.Ticker(symbol)
         df = t.history(period=period, auto_adjust=True)
+        if (df is None or df.empty) and period == "max":
+            df = t.history(period="10y", auto_adjust=True)
+            if df is None or df.empty:
+                df = t.history(period="5y", auto_adjust=True)
         if df is None or df.empty:
             return pd.DataFrame()
         if isinstance(df.columns, pd.MultiIndex):

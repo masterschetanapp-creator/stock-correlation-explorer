@@ -92,7 +92,8 @@ NSE_STOCKS = [
     {"symbol": "HINDALCO.NS", "name": "Hindalco Industries"},
     {"symbol": "UPL.NS", "name": "UPL"},
     {"symbol": "VEDL.NS", "name": "Vedanta"},
-    {"symbol": "ZOMATO.NS", "name": "Zomato"},
+    {"symbol": "JIOFIN.NS", "name": "Jio Financial Services"},
+    {"symbol": "SWIGGY.NS", "name": "Swiggy"},
     {"symbol": "PAYTM.NS", "name": "One 97 Communications (Paytm)"},
     {"symbol": "NYKAA.NS", "name": "FSN E-Commerce (Nykaa)"},
     {"symbol": "DMART.NS", "name": "Avenue Supermarts (DMart)"},
@@ -149,15 +150,18 @@ NSE_STOCKS = [
 # ---------------------------------------------------------------------------
 
 def _fetch_ticker(symbol: str, period: str) -> pd.DataFrame:
-    """Fetch historical daily data for a single ticker."""
+    """Fetch historical daily data for a single ticker with fallback."""
     try:
         ticker = yf.Ticker(symbol)
         df = ticker.history(period=period, auto_adjust=True)
+        if (df is None or df.empty) and period == "max":
+            df = ticker.history(period="10y", auto_adjust=True)
+            if df is None or df.empty:
+                df = ticker.history(period="5y", auto_adjust=True)
         if df is None or df.empty:
             return pd.DataFrame()
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
-        # Standardize date index to date-only datetime
         df.index = pd.to_datetime(df.index.strftime("%Y-%m-%d"))
         return df
     except Exception as exc:

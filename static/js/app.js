@@ -12,6 +12,7 @@ const state = {
   overlaySeries: {},
   factorMap: {},
   sortedDates: [],
+  dateToIndex: new Map(), // O(1) date index lookup for silky smooth hover
   currentSymbol: '',
   currentPeriod: '5y',
   debounceTimer: null,
@@ -183,9 +184,11 @@ async function analyzeStock() {
 
     state.data = await res.json();
 
-    // Build factor map
+    // Build factor map & fast O(1) date index
     state.factorMap = buildFactorMap(state.data);
     state.sortedDates = Object.keys(state.factorMap).sort();
+    state.dateToIndex = new Map();
+    state.sortedDates.forEach((d, i) => state.dateToIndex.set(d, i));
 
     // Render everything
     updateStockBanner();
@@ -222,25 +225,32 @@ async function analyzeStock() {
 function buildFactorMap(data) {
   const map = {};
 
+  // O(N) lookup maps
+  const stockMap = new Map();
+  for (const s of (data.stock || [])) {
+    if (s.date) stockMap.set(s.date, s.close);
+  }
+
   const factorLookups = {};
   for (const [key, values] of Object.entries(data.factors || {})) {
-    factorLookups[key] = {};
-    for (const item of values) {
-      factorLookups[key][item.date] = item.value;
+    const lk = new Map();
+    for (const item of (values || [])) {
+      if (item.date) lk.set(item.date, item.value);
     }
+    factorLookups[key] = lk;
   }
 
   const lastFactors = { usdinr: null, gold: null, silver: null, oil: null };
-  const allDates = (data.stock || []).map(s => s.date).sort();
+  const allDates = Array.from(stockMap.keys()).sort();
 
   for (const date of allDates) {
-    const stockPoint = data.stock.find(s => s.date === date);
-    const entry = { stock: stockPoint ? stockPoint.close : null };
+    const entry = { stock: stockMap.get(date) };
 
     for (const key of Object.keys(FACTORS)) {
-      if (factorLookups[key]?.[date] != null) {
-        entry[key] = factorLookups[key][date];
-        lastFactors[key] = entry[key];
+      const factorVal = factorLookups[key]?.get(date);
+      if (factorVal != null && Number.isFinite(factorVal)) {
+        entry[key] = factorVal;
+        lastFactors[key] = factorVal;
       } else {
         entry[key] = lastFactors[key];
       }
@@ -444,7 +454,7 @@ function updateChangeIndicator(elementId, dateStr, factorKey) {
   const el = document.getElementById(elementId);
   if (!el) return;
 
-  const idx = state.sortedDates.indexOf(dateStr);
+  const idx = state.dateToIndex.has(dateStr) ? state.dateToIndex.get(dateStr) : state.sortedDates.indexOf(dateStr);
   if (idx <= 0) {
     el.textContent = '---';
     el.className = 'factor-change';
@@ -474,7 +484,7 @@ function updateChangeIndicator(elementId, dateStr, factorKey) {
 
 function updateCorrelationArrows(dateStr) {
   const container = document.getElementById('snap-arrows');
-  const idx = state.sortedDates.indexOf(dateStr);
+  const idx = state.dateToIndex.has(dateStr) ? state.dateToIndex.get(dateStr) : state.sortedDates.indexOf(dateStr);
 
   if (idx <= 0) {
     container.innerHTML = '<span class="hint-text">First trading day of period</span>';
